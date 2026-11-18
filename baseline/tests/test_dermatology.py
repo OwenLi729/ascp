@@ -75,6 +75,8 @@ def test_real_data_runner_is_reproducible_and_writes_only_two_baselines(data_fil
     for name in ("repetitions.csv", "summary.csv", "run.json"):
         assert (a / name).read_bytes() == (b / name).read_bytes()
     metadata = json.loads((a / "run.json").read_text())
+    assert metadata["alpha"] == 0.10
+    assert metadata["classifier"]["C"] == 1.0
     train, held_out = set(metadata["training_indices"]), set(metadata["held_out_indices"])
     assert not train & held_out and len(train | held_out) == 72
     assert metadata["calibration_size"] + metadata["test_size"] == len(held_out)

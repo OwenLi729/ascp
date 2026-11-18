@@ -10,7 +10,7 @@ import numpy as np
 from .methods import METHODS
 
 
-def plot_metrics(summary, output, alpha):
+def plot_metrics(summary, output, alpha, title="UCI Dermatology", stage_names=None):
     """Save stagewise and overall metrics as PNG/PDF with 1.96-MCSE bars."""
     os.environ.setdefault("MPLCONFIGDIR", str(Path.cwd() / ".mpl-cache"))
     import matplotlib
@@ -19,8 +19,16 @@ def plot_metrics(summary, output, alpha):
     from matplotlib.ticker import PercentFormatter
 
     output = Path(output)
+    dataset_title = title
     lookup = {(row["method"], row["metric"]): row for row in summary}
     colors = {"Naive": "#c44e52", "Bonferroni": "#4c72b0"}
+    stage_count = sum(row["method"] == METHODS[0] and
+                      row["metric"].startswith("cumulative_miscoverage_stage") for row in summary)
+    if stage_names is None:
+        stage_names = (("Clinical", "Clinical +\nhistopathology") if stage_count == 2
+                       else tuple(f"Stage {t}" for t in range(1, stage_count + 1)))
+    if len(stage_names) != stage_count:
+        raise ValueError("stage names must match the number of evaluation stages")
     uncertainty = ("Error bars: mean ± 1.96 MCSE across calibration/test splits"
                    if any(row["mcse"] is not None for row in summary)
                    else "Single split; Monte Carlo error bars unavailable")
@@ -31,7 +39,7 @@ def plot_metrics(summary, output, alpha):
                 [0 if row["mcse"] is None else 1.96 * row["mcse"] for row in rows])
 
     def save(fig, name):
-        fig.suptitle("UCI Dermatology — Naive vs Bonferroni", fontsize=15)
+        fig.suptitle(f"{dataset_title} — Naive vs Bonferroni", fontsize=15)
         fig.supxlabel(uncertainty, fontsize=9)
         for ax in fig.axes:
             ax.spines[["top", "right"]].set_visible(False)
@@ -43,24 +51,24 @@ def plot_metrics(summary, output, alpha):
                         bbox_inches="tight", pad_inches=0.15)
         plt.close(fig)
 
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4.1), constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(max(12, stage_count * 4), 4.1), constrained_layout=True)
     stage_panels = [("cumulative_miscoverage", "Cumulative miscoverage", True),
                     ("mean_set_size", "Mean prediction-set size", False),
                     ("empty_set_rate", "Empty prediction sets", True)]
     for ax, (metric, title, proportion) in zip(axes, stage_panels):
         for index, method in enumerate(METHODS):
-            means, errors = values(method, [f"{metric}_stage1", f"{metric}_stage2"])
+            means, errors = values(method, [f"{metric}_stage{t}" for t in range(1, stage_count + 1)])
             offset = (index - (len(METHODS) - 1) / 2) * 0.32
-            positions = np.array([1, 2]) + offset
+            positions = np.arange(1, stage_count + 1) + offset
             ax.bar(positions, means, yerr=errors, width=0.3, capsize=4,
                    color=colors[method], alpha=0.9, label=method)
             for position, mean, error in zip(positions, means, errors):
-                label = f"{mean:.2%}" if proportion else f"{mean:.3f}"
+                label = ("0%" if mean == 0 else f"{mean:.2%}") if proportion else f"{mean:.3f}"
                 ax.annotate(label, (position, mean + error), xytext=(0, 5),
                             textcoords="offset points", ha="center", fontsize=9)
-        ax.set(title=title, xticks=[1, 2], xlim=(0.5, 2.5))
+        ax.set(title=title, xticks=range(1, stage_count + 1), xlim=(0.5, stage_count + 0.5))
         ax.margins(y=0.25)
-        ax.set_xticklabels(["Clinical", "Clinical +\nhistopathology"])
+        ax.set_xticklabels(stage_names)
         if proportion:
             ax.yaxis.set_major_formatter(PercentFormatter(1))
         if metric == "cumulative_miscoverage":
@@ -90,7 +98,7 @@ def plot_metrics(summary, output, alpha):
                        label=f"Target {alpha:.0%}")
             ax.legend(fontsize=9)
         if metric == "mean_stopping_stage":
-            ax.set(ylim=(0, 3), ylabel="Unresolved assigned stage 3")
+            ax.set(ylim=(0, stage_count + 1), ylabel=f"Unresolved assigned stage {stage_count + 1}")
         else:
             ax.margins(y=0.2)
     save(fig, "overall_metrics")
@@ -104,8 +112,10 @@ def main():
         summary = [{**row, "mean": float(row["mean"]),
                     "mcse": float(row["mcse"]) if row["mcse"] else None}
                    for row in csv.DictReader(handle)]
-    alpha = json.loads((args.results / "run.json").read_text())["alpha"]
-    plot_metrics(summary, args.results, alpha)
+    metadata = json.loads((args.results / "run.json").read_text())
+    plot_metrics(summary, args.results, metadata["alpha"],
+                 title=metadata.get("title", "UCI Dermatology"),
+                 stage_names=metadata.get("stage_names"))
 
 
 if __name__ == "__main__":
